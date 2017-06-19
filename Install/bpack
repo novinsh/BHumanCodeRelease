@@ -1,0 +1,159 @@
+#!/bin/bash
+
+scriptPath=$(echo $0 | sed "s|^\.\./|`pwd`/../|" | sed "s|^\./|`pwd`/|")
+baseDir=$(dirname "${scriptPath}")
+bhDir=$(dirname "${baseDir}")
+includeDir="${baseDir}/Include/"
+packagesDir="${baseDir}/Packages/"
+
+source "${includeDir}/bhumanBase"
+
+createManifest=""       # TODO: automation of package manifest creation (now: config)
+createPackage=""        # indicate whether this is a package creation process or not
+installPackage=""       # indicate whether this is a package installation process or not
+projectInfo=""          # if true then shows the project info
+
+packageName=""          # package name used in creation or installation of a package
+configFile=""           # path to the config file to parse and create package from its instructions
+
+bhumanRelease=""        # indicates bhuman last release year
+
+bold=$(tput bold)   # for the purpose of styling
+normal=$(tput sgr0) # for the purpose of stryling
+
+usage() {
+  echo ""
+  echo "${bold}NAME:${normal}"
+  echo " ${0} - A simple B-Human package manager."
+  echo ""
+  echo "${bold}SYNOPSIS:${normal}"
+  echo " ${0} [-h] [-p, -i] <package> [-c] <config>"
+  echo ""
+  echo "${bold}DESCRIPTION:${normal}"
+  echo " <package>  : package file name i.e. my_package.tar.gz stored in /Packages"
+  echo " <config>   : name of .bp config file containing the instruction to create"
+  echo "              a package in /Packages/confs"
+  echo ""
+  echo " -h         : Display this help"
+  echo " -p         : information about current project"
+  echo " -i         : install a package"
+  echo " -c         : create a package"
+  exit 1
+}
+
+parseOptions() {
+  while getopts :hpci opt ; do
+    case "$opt" in
+      p)
+        projectInfo="true"
+        ;;
+      c)
+        createPackage="true" 
+        configFile="${bhDir}/Install/Packages/confs/${2}.bp"
+        packageName="${2}"
+        ;;
+      i)
+        installPackage="true"
+        packageName="${2}"
+        ;;
+      [?]|h)
+        usage
+        ;;
+    esac
+  done
+
+  debug $#
+  debug $OPTIND
+  if [ "${projectInfo}" != "true" ]; then
+    shift $(($OPTIND-1))
+  fi
+
+  if ! [ $# -eq 1 ] ; then
+    error "bad number of arguments"
+    usage
+  fi
+# && [ "${projectInfo}" != "true" ] 
+}
+
+###############################################################################
+##                                                                           ##
+##  MAIN                                                                     ##
+##                                                                           ##
+###############################################################################
+
+## primitive checkups
+checkApp "sed"
+checkApp "git"
+checkApp "tail"
+checkApp "tr"
+
+## create required directories if doesn't exists
+cd ${bhDir}
+mkdir -p ${packagesDir}/confs/ 
+#mkdir -p ${packagesDir}/downloaded/
+#echo "Config/" > ${packagesDir}/confs/test.bp
+#echo "README.md" >> ${packagesDir}/confs/test.bp
+
+## extract version of current project
+readFromREADME="false"
+if [ -d "${bhDir}/.git" ]; then
+  lastRelease=`git tag -l coderelease* | tail -n1 | tr -dc '0-9'`
+  bhumanRelease=$((lastRelease+1))
+else
+  readFromREADME="true"
+fi
+
+if [ "${bhumanRelease}" -eq 1 ] || [ "${readFromREADME}" = "true" ]; then
+  lastRelease=`cat ${bhDir}/README.md | grep -e "coderelease" | head -n 1 | cut -d"\"" -f2 | tr -dc '0-9'`
+  bhumanRelease=$((lastRelease+1))
+fi
+
+## store project version for package creation purpose
+prjVersionPath=Install/Packages/confs/prjversion   
+echo ${bhumanRelease} > ${prjVersionPath}
+
+## parse passed arguments
+parseOptions "$@"
+
+## act according to the user input (request)
+if [ -n "${projectInfo}" ] && [ -d "${bhDir}/.git" ]; then
+    echo -e "\n git remote info:"
+    echo -e "-------------------------------------------------------------------"
+    git remote -v | sed 's/^/\t/'
+    echo -e "\n\n Project README.md:"
+    echo -e "-------------------------------------------------------------------"
+    cat README.md | sed 's/^/\t/'
+    echo -e "\n\n According to the git or README.md:"
+    echo -e "-------------------------------------------------------------------"
+    echo -e "\tYour project is for code release ${bhumanRelease}!\n"
+fi
+
+## package creation process
+if [ -n "${createPackage}" ]; then
+  echo "creating the package \"${packageName}.tar\"..."
+  tar -cvf "${packagesDir}/${packageName}.tar" -T ${configFile} 
+  tar -rvf "${packagesDir}/${packageName}.tar" -C "${packagesDir}/confs/" "prjversion"
+fi
+
+## package installation process
+if [ -n "${installPackage}" ]; then
+  echo "to install the package ${packageName}:"
+  mkdir -p "${packagesDir}/tmp/${packageName}"
+  tar -xf "${packagesDir}/${packageName}" -C "${packagesDir}/tmp/${packageName}"
+  extractedPackageVersion=`cat ${packagesDir}/tmp/${packageName}/prjversion`
+
+  if [ "${extractedPackageVersion}" -ne "${bhumanRelease}" ]; then
+    read -p "Package version and yours don't match, are you sure you want to continue (Y/n)?" CONT
+
+    if [ "$CONT" = "y" ]; then
+      echo "yaaa";
+    else
+      exit;
+    fi
+  fi
+
+  rm "${packagesDir}/tmp/${packageName}/prjversion"
+  cp -iR ${packagesDir}/tmp/${packageName}/* ${bhDir}
+  echo "Cleanup.."
+  rm -r "${packagesDir}/tmp/${packageName}"
+fi
